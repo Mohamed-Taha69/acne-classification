@@ -1,0 +1,35 @@
+project:
+  name: acne04-classification
+  seed: 42
+  output_dir: outputs
+  checkpoints_dir: checkpoints
+  logs_dir: logs
+
+data:
+  train_dir: data/processed/acne04/train
+  val_dir: data/processed/acne04/val
+  num_classes: 4  # adjust to your Acne04 label set
+  img_size: 224
+  num_workers: 4
+
+train:
+  model: resnet18
+  pretrained: true
+  epochs: 20
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 0.0005
+  optimizer: adamw
+  scheduler: cosine
+  mixup: 0.0
+  cutmix: 0.0
+
+aug:
+  hflip: 0.5
+  vflip: 0.0
+  color_jitter: [0.2, 0.2, 0.2, 0.1]
+  random_erasing: 0.0
+
+infer:
+  tta: 0
+
