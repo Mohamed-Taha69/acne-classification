@@ -1,5 +1,6 @@
 project:
-  name: acne04-classification
+
+  name: acne04-classification-optimized
   seed: 42
   output_dir: outputs
   checkpoints_dir: checkpoints
@@ -12,24 +13,40 @@ data:
   img_size: 224
   num_workers: 4
 
+  sampler: weighted  # none|weighted
+
 train:
-  model: resnet18
+
+
+  model: efficientnet_b3
   pretrained: true
-  epochs: 20
-  batch_size: 32
-  lr: 0.001
-  weight_decay: 0.0005
+  epochs: 50
+  batch_size: 16
+  lr: 0.0005
+
+
+  weight_decay: 0.01
   optimizer: adamw
   scheduler: cosine
-  mixup: 0.0
-  cutmix: 0.0
+  loss: focal           # focal|cross_entropy
+  class_weights: auto   # auto|none|[w0,w1,w2,w3]
+  mixup: 0.2
+
+
+  cutmix: 0.2
 
 aug:
   hflip: 0.5
-  vflip: 0.0
-  color_jitter: [0.2, 0.2, 0.2, 0.1]
-  random_erasing: 0.0
+  vflip: 0.15
+  color_jitter: [0.3, 0.3, 0.3, 0.15]
+  random_erasing: 0.25
+  rotate: 30           # degrees
+
+
+  affine: [0.1, 10]    # translate (fraction), shear (deg)
 
 infer:
-  tta: 0
+
+
+  tta: 4
 

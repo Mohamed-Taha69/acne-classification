@@ -10,6 +10,8 @@ from ..utils.config import load_config
 from ..utils.seed import set_global_seed
 from ..data.acne04_dataset import build_dataloaders
 from ..models.resnet import build_resnet
+from ..utils.losses import FocalLoss
+import random
 
 
 def build_optimizer(params, name: str, lr: float, weight_decay: float) -> Optimizer:
@@ -30,7 +32,37 @@ def build_scheduler(optimizer: Optimizer, name: str, epochs: int) -> _LRSchedule
     raise ValueError(f"Unsupported scheduler: {name}")
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device):
+def apply_mixup_cutmix(images: torch.Tensor, targets: torch.Tensor, mixup_alpha: float, cutmix_alpha: float):
+    lam = 1.0
+    indices = torch.randperm(images.size(0), device=images.device)
+    shuffled_targets = targets[indices]
+
+    do_mixup = mixup_alpha > 0 and random.random() < 0.5
+    do_cutmix = (not do_mixup) and cutmix_alpha > 0
+
+    if do_mixup:
+        lam = torch.distributions.Beta(mixup_alpha, mixup_alpha).sample().item()
+        images = lam * images + (1 - lam) * images[indices]
+        return images, targets, shuffled_targets, lam, 'mixup'
+    if do_cutmix:
+        lam = torch.distributions.Beta(cutmix_alpha, cutmix_alpha).sample().item()
+        _, _, H, W = images.shape
+        cut_w = int(W * (1 - lam) ** 0.5)
+        cut_h = int(H * (1 - lam) ** 0.5)
+        cx = random.randint(0, W)
+        cy = random.randint(0, H)
+        x1 = max(cx - cut_w // 2, 0)
+        y1 = max(cy - cut_h // 2, 0)
+        x2 = min(cx + cut_w // 2, W)
+        y2 = min(cy + cut_h // 2, H)
+        images[:, :, y1:y2, x1:x2] = images[indices, :, y1:y2, x1:x2]
+        box_area = (x2 - x1) * (y2 - y1)
+        lam = 1 - box_area / float(W * H)
+        return images, targets, shuffled_targets, lam, 'cutmix'
+    return images, targets, targets, lam, 'none'
+
+
+def train_one_epoch(model, loader, criterion, optimizer, device, mixup_alpha: float = 0.0, cutmix_alpha: float = 0.0):
     model.train()
     running_loss = 0.0
     correct = 0
@@ -40,8 +72,12 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
         targets = targets.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        outputs = model(images)
-        loss = criterion(outputs, targets)
+        mixed_images, t1, t2, lam, mode = apply_mixup_cutmix(images, targets, mixup_alpha, cutmix_alpha)
+        outputs = model(mixed_images)
+        if mode in ('mixup', 'cutmix'):
+            loss = lam * criterion(outputs, t1) + (1 - lam) * criterion(outputs, t2)
+        else:
+            loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
 
@@ -89,9 +125,10 @@ def main():
     batch_size = int(cfg.get("train.batch_size", 32))
     num_workers = int(cfg.get("data.num_workers", 4))
     aug_cfg = cfg.get("aug", {})
+    sampler_mode = cfg.get("data.sampler", "none")
 
     train_loader, val_loader, inferred_num_classes, class_names = build_dataloaders(
-        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers
+        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode
     )
 
     cfg_num_classes = cfg.get("data.num_classes", inferred_num_classes)
@@ -112,7 +149,24 @@ def main():
     scheduler_name = cfg.get("train.scheduler", "cosine")
     scheduler = build_scheduler(optimizer, scheduler_name, epochs)
 
-    criterion = nn.CrossEntropyLoss()
+    # Build loss with optional class weights and focal loss
+    loss_name = str(cfg.get("train.loss", "cross_entropy")).lower()
+    class_weights_cfg = cfg.get("train.class_weights", "none")
+    weight_tensor = None
+    if class_weights_cfg == "auto":
+        # compute from training targets
+        targets = torch.tensor(getattr(train_loader.dataset, 'targets'))
+        counts = torch.bincount(targets)
+        weights = 1.0 / torch.clamp(counts.float(), min=1.0)
+        weights = weights * (len(counts) / weights.sum())
+        weight_tensor = weights.to(device)
+    elif isinstance(class_weights_cfg, (list, tuple)):
+        weight_tensor = torch.tensor(class_weights_cfg, dtype=torch.float).to(device)
+
+    if loss_name == "focal":
+        criterion = FocalLoss(gamma=2.0, weight=weight_tensor)
+    else:
+        criterion = nn.CrossEntropyLoss(weight=weight_tensor)
 
     # Output dirs
     checkpoints_dir = Path(cfg.get("project.checkpoints_dir", "checkpoints"))
@@ -123,8 +177,11 @@ def main():
     best_val_acc = 0.0
     best_path = checkpoints_dir / "best.pt"
 
+    mixup_alpha = float(cfg.get("train.mixup", 0.0))
+    cutmix_alpha = float(cfg.get("train.cutmix", 0.0))
+
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, mixup_alpha, cutmix_alpha)
         val_loss, val_acc = validate(model, val_loader, criterion, device)
         scheduler.step()
 

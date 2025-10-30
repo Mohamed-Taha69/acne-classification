@@ -4,6 +4,8 @@ from sklearn.metrics import classification_report, confusion_matrix
 from ..utils.config import load_config
 from ..data.acne04_dataset import build_dataloaders
 from ..models.resnet import build_resnet
+from torchvision import transforms
+from torchvision.transforms import functional as F
 
 
 @torch.no_grad()
@@ -38,9 +40,25 @@ def main():
 
     all_preds = []
     all_targets = []
+    tta = int(cfg.get("infer.tta", 0))
     for images, targets in val_loader:
         images = images.to(device)
-        outputs = model(images)
+        if tta <= 1:
+            outputs = model(images)
+        else:
+            # simple TTA: original + hflip + vflip + h+v (limited by tta)
+            variants = [images]
+            if tta >= 2:
+                variants.append(torch.flip(images, dims=[3]))  # hflip
+            if tta >= 3:
+                variants.append(torch.flip(images, dims=[2]))  # vflip
+            if tta >= 4:
+                variants.append(torch.flip(images, dims=[2, 3]))  # hv
+            logits = None
+            for v in variants[:tta]:
+                out = model(v)
+                logits = out if logits is None else logits + out
+            outputs = logits / len(variants[:tta])
         pred = outputs.argmax(dim=1).cpu()
         all_preds.extend(pred.tolist())
         all_targets.extend(targets.tolist())
