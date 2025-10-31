@@ -10,7 +10,7 @@ from ..utils.config import load_config
 from ..utils.seed import set_global_seed
 from ..data.acne04_dataset import build_dataloaders
 from ..models.resnet import build_resnet
-from ..utils.losses import FocalLoss
+from ..utils.losses import FocalLoss, ClassAwareFocalLoss
 import random
 
 
@@ -23,10 +23,14 @@ def build_optimizer(params, name: str, lr: float, weight_decay: float) -> Optimi
     raise ValueError(f"Unsupported optimizer: {name}")
 
 
-def build_scheduler(optimizer: Optimizer, name: str, epochs: int) -> _LRScheduler:
+def build_scheduler(optimizer: Optimizer, name: str, epochs: int, warmup_epochs: int = 0) -> _LRScheduler:
     name = name.lower()
     if name == "cosine":
         return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    if name == "cosine_warmup":
+        warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=max(1, warmup_epochs))
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs - warmup_epochs))
+        return torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
     if name == "none":
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
     raise ValueError(f"Unsupported scheduler: {name}")
@@ -126,9 +130,11 @@ def main():
     num_workers = int(cfg.get("data.num_workers", 4))
     aug_cfg = cfg.get("aug", {})
     sampler_mode = cfg.get("data.sampler", "none")
+    oversample_factors = cfg.get("data.oversample_factors")
+    minority_aug = bool(cfg.get("data.minority_aug", False))
 
     train_loader, val_loader, inferred_num_classes, class_names = build_dataloaders(
-        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode
+        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode, oversample_factors, minority_aug
     )
 
     cfg_num_classes = cfg.get("data.num_classes", inferred_num_classes)
@@ -147,7 +153,8 @@ def main():
 
     epochs = int(cfg.get("train.epochs", 20))
     scheduler_name = cfg.get("train.scheduler", "cosine")
-    scheduler = build_scheduler(optimizer, scheduler_name, epochs)
+    warmup_epochs = int(cfg.get("train.warmup_epochs", 0))
+    scheduler = build_scheduler(optimizer, scheduler_name, epochs, warmup_epochs)
 
     # Build loss with optional class weights and focal loss
     loss_name = str(cfg.get("train.loss", "cross_entropy")).lower()
@@ -163,10 +170,14 @@ def main():
     elif isinstance(class_weights_cfg, (list, tuple)):
         weight_tensor = torch.tensor(class_weights_cfg, dtype=torch.float).to(device)
 
-    if loss_name == "focal":
+    if loss_name == "class_focal":
+        gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
+        criterion = ClassAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor)
+    elif loss_name == "focal":
         criterion = FocalLoss(gamma=2.0, weight=weight_tensor)
     else:
-        criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+        label_smoothing = float(cfg.get("train.label_smoothing", 0.0))
+        criterion = nn.CrossEntropyLoss(weight=weight_tensor, label_smoothing=label_smoothing)
 
     # Output dirs
     checkpoints_dir = Path(cfg.get("project.checkpoints_dir", "checkpoints"))

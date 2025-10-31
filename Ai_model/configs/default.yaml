@@ -13,27 +13,32 @@ data:
   img_size: 224
   num_workers: 4
 
-  sampler: weighted  # none|weighted
+  sampler: weighted_plus  # none|weighted|weighted_plus
+  oversample_factors: [1.0, 1.0, 2.5, 3.0]
+  minority_aug: true
 
 train:
 
 
-  model: efficientnet_b3
+  model: efficientnet_b3_cbam
   pretrained: true
-  epochs: 50
+  epochs: 60
   batch_size: 16
   lr: 0.0005
 
 
   weight_decay: 0.01
   optimizer: adamw
-  scheduler: cosine
-  loss: focal           # focal|cross_entropy
-  class_weights: auto   # auto|none|[w0,w1,w2,w3]
-  mixup: 0.2
+  scheduler: cosine_warmup
+  warmup_epochs: 5
+  loss: class_focal
+  class_weights: [1.0, 1.1, 2.5, 2.0]
+  focal_gamma: [2.0, 2.0, 2.8, 2.5]
+  mixup: 0.1
 
 
-  cutmix: 0.2
+  cutmix: 0.1
+  label_smoothing: 0.0
 
 aug:
   hflip: 0.5
