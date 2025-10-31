@@ -65,7 +65,7 @@ def build_resnet(model_name: str, num_classes: int, pretrained: bool = True) -> 
                 super().__init__()
                 self.features = b.features
                 self.avgpool = b.avgpool
-                self.dropout = b.dropout
+                self.dropout = getattr(b, "dropout", nn.Dropout(0.3))
                 self.attn = attn
                 self.classifier = cls
 
