@@ -10,7 +10,7 @@ from ..utils.config import load_config
 from ..utils.seed import set_global_seed
 from ..data.acne04_dataset import build_dataloaders
 from ..models.resnet import build_resnet
-from ..utils.losses import FocalLoss, ClassAwareFocalLoss
+from ..utils.losses import FocalLoss, ClassAwareFocalLoss, BoundaryAwareFocalLoss
 import random
 
 
@@ -132,9 +132,10 @@ def main():
     sampler_mode = cfg.get("data.sampler", "none")
     oversample_factors = cfg.get("data.oversample_factors")
     minority_aug = bool(cfg.get("data.minority_aug", False))
+    hard_mining = bool(cfg.get("data.hard_mining", False))
 
     train_loader, val_loader, inferred_num_classes, class_names = build_dataloaders(
-        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode, oversample_factors, minority_aug
+        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode, oversample_factors, minority_aug, hard_mining
     )
 
     cfg_num_classes = cfg.get("data.num_classes", inferred_num_classes)
@@ -170,7 +171,11 @@ def main():
     elif isinstance(class_weights_cfg, (list, tuple)):
         weight_tensor = torch.tensor(class_weights_cfg, dtype=torch.float).to(device)
 
-    if loss_name == "class_focal":
+    if loss_name == "boundary_aware_focal":
+        gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
+        confusion_penalty = float(cfg.get("train.confusion_penalty", 2.0))
+        criterion = BoundaryAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor, confusion_penalty=confusion_penalty)
+    elif loss_name == "class_focal":
         gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
         criterion = ClassAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor)
     elif loss_name == "focal":

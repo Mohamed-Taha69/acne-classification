@@ -25,7 +25,7 @@ class ClassConditionalTransformDataset(Dataset):
         return img, target
 
 
-def build_dataloaders(train_dir: str, val_dir: str, img_size: int, aug_cfg: dict, batch_size: int, num_workers: int, sampler_mode: str = "none", oversample_factors=None, minority_aug: bool = False) -> Tuple[DataLoader, DataLoader, int, list]:
+def build_dataloaders(train_dir: str, val_dir: str, img_size: int, aug_cfg: dict, batch_size: int, num_workers: int, sampler_mode: str = "none", oversample_factors=None, minority_aug: bool = False, hard_mining: bool = False) -> Tuple[DataLoader, DataLoader, int, list]:
     train_tfms, val_tfms = build_transforms(img_size, aug_cfg)
 
     base_train_ds = datasets.ImageFolder(root=train_dir, transform=None)
@@ -57,6 +57,17 @@ def build_dataloaders(train_dir: str, val_dir: str, img_size: int, aug_cfg: dict
             factors = np.array(oversample_factors, dtype=float)
             if factors.shape[0] == class_weights.shape[0]:
                 class_weights = class_weights * factors
+        
+        # Hard mining: boost Moderate(1) and Severe(2) boundary cases
+        if hard_mining:
+            # Apply boost per-class, then broadcast to samples
+            class_boost = np.ones(len(class_weights), dtype=float)
+            if len(class_weights) > 1:
+                class_boost[1] *= 1.5  # Moderate (class 1)
+            if len(class_weights) > 2:
+                class_boost[2] *= 2.0  # Severe (class 2) gets more boost
+            class_weights = class_weights * class_boost
+        
         sample_weights = class_weights[targets]
         sampler = WeightedRandomSampler(sample_weights.tolist(), num_samples=len(sample_weights), replacement=True)
 
