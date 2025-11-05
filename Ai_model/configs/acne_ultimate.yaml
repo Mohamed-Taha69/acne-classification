@@ -1,0 +1,69 @@
+project:
+  name: acne04-ultimate
+  seed: 42
+  output_dir: outputs
+  checkpoints_dir: outputs/checkpoints
+  logs_dir: outputs/logs
+
+data:
+  train_dir: data/processed/acne04/train
+  val_dir: data/processed/acne04/val
+  num_classes: 4
+  img_size: 384  # Larger for better skin detail
+  num_workers: 4
+  sampler: weighted_plus
+  oversample_factors: [1.0, 1.0, 3.0, 3.5]
+  minority_aug: true
+  hard_mining: true
+
+train:
+  model: efficientnet_b3_cbam
+  pretrained: true
+  epochs: 120
+  batch_size: 8  # Smaller due to larger images (384px)
+  lr: 0.00025
+  weight_decay: 0.0008  # Lower for fine-tuning
+  optimizer: adamw
+  scheduler: cosine_warmup
+  warmup_epochs: 5
+  loss: boundary_aware_focal
+  class_weights: [1.0, 1.2, 3.2, 2.8]
+  focal_gamma: [2.0, 2.2, 3.2, 3.0]
+  confusion_penalty: 2.0
+  mixup: 0.05  # Conservative for medical images
+  cutmix: 0.05
+  label_smoothing: 0.05
+  gradient_clip: 1.0
+  accumulation_steps: 2  # Effective batch size = 8 * 2 = 16
+  early_stopping:
+    patience: 15  # Stop if no improvement for 15 epochs
+    min_delta: 0.0001  # Minimum change to qualify as improvement
+  ema:
+    enabled: true
+    decay: 0.9999  # EMA decay factor
+  swa:
+    enabled: true
+    start_epoch: 80  # Start SWA after 80 epochs
+    lr: 0.0001  # Lower LR for SWA
+
+aug:
+  hflip: 0.5
+  vflip: 0.15
+  color_jitter: [0.4, 0.4, 0.4, 0.2]
+  random_erasing: 0.35
+  rotate: 45
+  affine: [0.15, 15]
+  blur: 0.15  # Gaussian blur probability
+  sharpen: 0.15  # Sharpening probability
+  cutout: 0.2  # Cutout probability
+
+infer:
+  tta: 8
+  use_best_checkpoint: true
+
+# TARGETED IMPROVEMENTS:
+# - Reduce Moderate/Severe confusion
+# - Boost Severe recall > 75%
+# - Accuracy target: 85-88%
+# - F1-macro target: 0.84+
+

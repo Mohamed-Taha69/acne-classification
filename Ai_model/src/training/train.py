@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 from tqdm import tqdm
+import copy
 
 from ..utils.config import load_config
 from ..utils.seed import set_global_seed
@@ -66,28 +67,50 @@ def apply_mixup_cutmix(images: torch.Tensor, targets: torch.Tensor, mixup_alpha:
     return images, targets, targets, lam, 'none'
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device, mixup_alpha: float = 0.0, cutmix_alpha: float = 0.0):
+def train_one_epoch(model, loader, criterion, optimizer, device, mixup_alpha: float = 0.0, cutmix_alpha: float = 0.0,
+                    accumulation_steps: int = 1, gradient_clip: float = 0.0, ema_model=None, ema_decay: float = 0.9999):
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
-    for images, targets in tqdm(loader, desc="train", leave=False):
+    optimizer.zero_grad()
+    
+    for batch_idx, (images, targets) in enumerate(tqdm(loader, desc="train", leave=False)):
         images = images.to(device)
         targets = targets.to(device)
 
-        optimizer.zero_grad(set_to_none=True)
         mixed_images, t1, t2, lam, mode = apply_mixup_cutmix(images, targets, mixup_alpha, cutmix_alpha)
         outputs = model(mixed_images)
         if mode in ('mixup', 'cutmix'):
             loss = lam * criterion(outputs, t1) + (1 - lam) * criterion(outputs, t2)
         else:
             loss = criterion(outputs, targets)
+        
+        # Scale loss for accumulation
+        loss = loss / accumulation_steps
         loss.backward()
-        optimizer.step()
 
-        running_loss += loss.item() * images.size(0)
+        # Accumulate gradients
+        if (batch_idx + 1) % accumulation_steps == 0:
+            # Gradient clipping
+            if gradient_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+            
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            # Update EMA model
+            if ema_model is not None:
+                update_ema_model(ema_model, model, decay=ema_decay)
+
+        running_loss += loss.item() * images.size(0) * accumulation_steps
         _, predicted = outputs.max(1)
-        correct += predicted.eq(targets).sum().item()
+        # For accuracy calculation, use original targets (not mixed)
+        if mode in ('mixup', 'cutmix'):
+            # Use original targets for accuracy
+            correct += (predicted.eq(targets).sum().item())
+        else:
+            correct += predicted.eq(targets).sum().item()
         total += targets.size(0)
 
     return running_loss / max(1, total), correct / max(1, total)
@@ -109,6 +132,54 @@ def validate(model, loader, criterion, device):
         correct += predicted.eq(targets).sum().item()
         total += targets.size(0)
     return running_loss / max(1, total), correct / max(1, total)
+
+
+def update_ema_model(ema_model, model, decay=0.9999):
+    """Update EMA model parameters."""
+    with torch.no_grad():
+        for ema_param, param in zip(ema_model.parameters(), model.parameters()):
+            ema_param.data.mul_(decay).add_(param.data, alpha=1 - decay)
+
+
+def create_ema_model(model):
+    """Create EMA model copy."""
+    ema_model = copy.deepcopy(model)
+    for param in ema_model.parameters():
+        param.requires_grad_(False)
+    return ema_model
+
+
+class EarlyStopping:
+    """Early stopping utility."""
+    def __init__(self, patience=10, min_delta=0.0, mode='max'):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.mode = mode
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, score):
+        if self.best_score is None:
+            self.best_score = score
+        elif self.mode == 'max':
+            if score < self.best_score + self.min_delta:
+                self.counter += 1
+                if self.counter >= self.patience:
+                    self.early_stop = True
+            else:
+                self.best_score = score
+                self.counter = 0
+        else:  # mode == 'min'
+            if score > self.best_score - self.min_delta:
+                self.counter += 1
+                if self.counter >= self.patience:
+                    self.early_stop = True
+            else:
+                self.best_score = score
+                self.counter = 0
+        
+        return self.early_stop
 
 
 def main():
@@ -195,22 +266,118 @@ def main():
 
     mixup_alpha = float(cfg.get("train.mixup", 0.0))
     cutmix_alpha = float(cfg.get("train.cutmix", 0.0))
+    gradient_clip = float(cfg.get("train.gradient_clip", 0.0))
+    accumulation_steps = int(cfg.get("train.accumulation_steps", 1))
+    
+    # EMA setup
+    ema_enabled = cfg.get("train.ema.enabled", False)
+    ema_decay = float(cfg.get("train.ema.decay", 0.9999))
+    ema_model = None
+    if ema_enabled:
+        ema_model = create_ema_model(model)
+        print("✅ EMA enabled with decay:", ema_decay)
+    
+    # SWA setup
+    swa_enabled = cfg.get("train.swa.enabled", False)
+    swa_start_epoch = int(cfg.get("train.swa.start_epoch", epochs // 2))
+    swa_lr = float(cfg.get("train.swa.lr", lr * 0.1))
+    swa_model = None
+    swa_scheduler = None
+    if swa_enabled:
+        swa_model = torch.optim.swa_utils.AveragedModel(model)
+        swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=swa_lr)
+        print(f"✅ SWA enabled starting from epoch {swa_start_epoch}")
+    
+    # Early stopping setup
+    early_stopping_cfg = cfg.get("train.early_stopping", {})
+    early_stopping = None
+    if early_stopping_cfg:
+        patience = int(early_stopping_cfg.get("patience", 10))
+        min_delta = float(early_stopping_cfg.get("min_delta", 0.0))
+        early_stopping = EarlyStopping(patience=patience, min_delta=min_delta, mode='max')
+        print(f"✅ Early stopping enabled: patience={patience}, min_delta={min_delta}")
 
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, mixup_alpha, cutmix_alpha)
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
-        scheduler.step()
+        # Update EMA decay in train_one_epoch call
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, criterion, optimizer, device, 
+            mixup_alpha, cutmix_alpha, accumulation_steps, gradient_clip,
+            ema_model if ema_enabled else None, ema_decay
+        )
+        
+        # Validation - use EMA model if enabled
+        eval_model = ema_model if (ema_enabled and ema_model is not None) else model
+        val_loss, val_acc = validate(eval_model, val_loader, criterion, device)
+        
+        # Update SWA and scheduler
+        swa_val_loss, swa_val_acc = None, None
+        if swa_enabled and epoch >= swa_start_epoch:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+            # Use SWA model for validation after it starts
+            swa_val_loss, swa_val_acc = validate(swa_model.module, val_loader, criterion, device)
+            print(f"Epoch {epoch:03d} | train_loss {train_loss:.4f} acc {train_acc:.4f} | "
+                  f"val_loss {val_loss:.4f} acc {val_acc:.4f} | "
+                  f"swa_val_loss {swa_val_loss:.4f} acc {swa_val_acc:.4f}")
+        else:
+            scheduler.step()
+            print(f"Epoch {epoch:03d} | train_loss {train_loss:.4f} acc {train_acc:.4f} | "
+                  f"val_loss {val_loss:.4f} acc {val_acc:.4f}")
 
-        print(f"Epoch {epoch:03d} | train_loss {train_loss:.4f} acc {train_acc:.4f} | val_loss {val_loss:.4f} acc {val_acc:.4f}")
+        # Determine best model to save
+        # Priority: SWA > EMA > regular model
+        best_model_to_save = None
+        best_acc_to_save = val_acc
+        
+        if swa_enabled and epoch >= swa_start_epoch and swa_val_acc is not None:
+            if swa_val_acc > val_acc:
+                best_model_to_save = swa_model.module
+                best_acc_to_save = swa_val_acc
+            else:
+                best_model_to_save = eval_model
+                best_acc_to_save = val_acc
+        else:
+            best_model_to_save = eval_model
+            best_acc_to_save = val_acc
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # Check for best model
+        if best_acc_to_save > best_val_acc:
+            best_val_acc = best_acc_to_save
             torch.save({
-                "model": model.state_dict(),
+                "model": best_model_to_save.state_dict(),
                 "class_names": class_names,
                 "config": cfg.raw,
+                "epoch": epoch,
+                "val_acc": best_val_acc,
+                "is_ema": ema_enabled and best_model_to_save == ema_model,
+                "is_swa": swa_enabled and best_model_to_save == swa_model.module if swa_enabled else False,
             }, best_path)
-            print(f"Saved new best checkpoint to: {best_path}")
+            print(f"💾 Saved new best checkpoint (acc={best_val_acc:.4f}) to: {best_path}")
+        
+        # Early stopping check (use best accuracy we're tracking)
+        if early_stopping is not None:
+            if early_stopping(best_acc_to_save):
+                print(f"⏹️  Early stopping triggered at epoch {epoch}")
+                break
+
+    # Final SWA update if enabled
+    if swa_enabled:
+        print("🔄 Finalizing SWA model...")
+        torch.optim.swa_utils.update_bn(train_loader, swa_model.module, device=device)
+        swa_val_loss, swa_val_acc = validate(swa_model.module, val_loader, criterion, device)
+        print(f"Final SWA validation: loss={swa_val_loss:.4f}, acc={swa_val_acc:.4f}")
+        
+        # Save final SWA model if it's better
+        if swa_val_acc > best_val_acc:
+            torch.save({
+                "model": swa_model.module.state_dict(),
+                "class_names": class_names,
+                "config": cfg.raw,
+                "epoch": epoch,
+                "val_acc": swa_val_acc,
+                "swa": True,
+            }, checkpoints_dir / "swa_final.pt")
+            print(f"💾 Saved final SWA model (acc={swa_val_acc:.4f})")
 
 
 if __name__ == "__main__":
