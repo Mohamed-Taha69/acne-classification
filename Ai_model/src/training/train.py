@@ -283,6 +283,7 @@ def main():
     swa_lr = float(cfg.get("train.swa.lr", lr * 0.1))
     swa_model = None
     swa_scheduler = None
+    swa_started = False  # Track if SWA actually started
     if swa_enabled:
         swa_model = torch.optim.swa_utils.AveragedModel(model)
         swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=swa_lr)
@@ -312,6 +313,9 @@ def main():
         # Update SWA and scheduler
         swa_val_loss, swa_val_acc = None, None
         if swa_enabled and epoch >= swa_start_epoch:
+            if not swa_started:
+                swa_started = True
+                print(f"🔄 SWA started at epoch {epoch}")
             swa_model.update_parameters(model)
             swa_scheduler.step()
             # Use SWA model for validation after it starts
@@ -360,8 +364,8 @@ def main():
                 print(f"⏹️  Early stopping triggered at epoch {epoch}")
                 break
 
-    # Final SWA update if enabled
-    if swa_enabled:
+    # Final SWA update if enabled and actually started
+    if swa_enabled and swa_started:
         print("🔄 Finalizing SWA model...")
         torch.optim.swa_utils.update_bn(train_loader, swa_model.module, device=device)
         swa_val_loss, swa_val_acc = validate(swa_model.module, val_loader, criterion, device)
@@ -378,6 +382,8 @@ def main():
                 "swa": True,
             }, checkpoints_dir / "swa_final.pt")
             print(f"💾 Saved final SWA model (acc={swa_val_acc:.4f})")
+    elif swa_enabled and not swa_started:
+        print(f"⚠️  SWA was enabled but never started (training stopped at epoch {epoch} before SWA start epoch {swa_start_epoch})")
 
 
 if __name__ == "__main__":

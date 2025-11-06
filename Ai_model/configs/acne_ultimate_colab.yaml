@@ -36,14 +36,14 @@ train:
   gradient_clip: 1.0
   accumulation_steps: 2  # Effective batch size = 8 * 2 = 16
   early_stopping:
-    patience: 15  # Stop if no improvement for 15 epochs
+    patience: 20  # Stop if no improvement for 20 epochs (increased from 15)
     min_delta: 0.0001  # Minimum change to qualify as improvement
   ema:
     enabled: true
     decay: 0.9999  # EMA decay factor
   swa:
     enabled: true
-    start_epoch: 80  # Start SWA after 80 epochs
+    start_epoch: 35  # Start SWA earlier (was 80, but training stops around 58)
     lr: 0.0001  # Lower LR for SWA
 
 aug:
