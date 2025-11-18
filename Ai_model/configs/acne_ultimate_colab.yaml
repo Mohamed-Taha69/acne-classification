@@ -1,0 +1,112 @@
+project:
+  name: acne04-ultimate-colab-preprocessing
+  seed: 42
+  output_dir: /content/outputs
+  checkpoints_dir: /content/outputs/checkpoints
+  logs_dir: /content/outputs/logs
+
+data:
+  train_dir: /content/drive/MyDrive/acne_dataset/train
+  val_dir: /content/drive/MyDrive/acne_dataset/val
+  num_classes: 4
+  img_size: 384  # Larger for better skin detail
+  num_workers: 2  # Lower for Colab (reduce if memory issues)
+  sampler: weighted_plus
+  oversample_factors: [1.0, 1.0, 3.0, 3.5]
+  minority_aug: true
+  hard_mining: true
+  enable_preprocessing: true  # Enable preprocessing pipeline (median filter, segmentation, CLAHE, sharpening)
+
+train:
+  model: efficientnet_b3_cbam
+  pretrained: true
+  epochs: 120
+  batch_size: 8  # Smaller due to larger images (384px) and preprocessing overhead
+  lr: 0.00025
+  weight_decay: 0.0008  # Lower for fine-tuning
+  optimizer: adamw
+  scheduler: cosine_warmup
+  warmup_epochs: 5
+  loss: boundary_aware_focal
+  class_weights: [1.0, 1.2, 3.2, 2.8]
+  focal_gamma: [2.0, 2.2, 3.2, 3.0]
+  confusion_penalty: 2.0
+  mixup: 0.05  # Conservative for medical images
+  cutmix: 0.05
+  label_smoothing: 0.05
+  gradient_clip: 1.0
+  accumulation_steps: 2  # Effective batch size = 8 * 2 = 16
+  early_stopping:
+    patience: 20  # Stop if no improvement for 20 epochs
+    min_delta: 0.0001  # Minimum change to qualify as improvement
+  ema:
+    enabled: true
+    decay: 0.9999  # EMA decay factor
+  swa:
+    enabled: true
+    start_epoch: 35  # Start SWA at epoch 35
+    lr: 0.0001  # Lower LR for SWA
+
+aug:
+  hflip: 0.5
+  vflip: 0.15
+  color_jitter: [0.4, 0.4, 0.4, 0.2]
+  random_erasing: 0.35
+  rotate: 45
+  affine: [0.15, 15]
+  blur: 0.15  # Gaussian blur probability
+  sharpen: 0.15  # Sharpening probability (additional to preprocessing)
+  cutout: 0.2  # Cutout probability
+
+infer:
+  tta: 8
+  use_best_checkpoint: true
+
+# PREPROCESSING PIPELINE:
+# The preprocessing pipeline (enabled via data.enable_preprocessing: true) applies:
+# 1. Median filter (ksize=5) - Removes noise while preserving edges
+# 2. Otsu segmentation - Isolates acne lesions from background
+# 3. CLAHE enhancement - Improves local contrast
+# 4. Sharpening - Enhances edge details
+#
+# Expected improvements: ~80% baseline → 88-92% with preprocessing
+#
+# To disable preprocessing, set: data.enable_preprocessing: false
+
+# GOOGLE COLAB USAGE:
+# 1. Mount Google Drive:
+#    from google.colab import drive
+#    drive.mount('/content/drive')
+#
+# 2. Upload your dataset to: /content/drive/MyDrive/acne_dataset/
+#    Structure should be:
+#    /content/drive/MyDrive/acne_dataset/
+#      train/
+#        Mild/
+#        Moderate/
+#        Severe/
+#        Very_Severe/
+#      val/
+#        Mild/
+#        Moderate/
+#        Severe/
+#        Very_Severe/
+#
+# 3. Install dependencies:
+#    !pip install torch torchvision timm numpy scikit-learn pyyaml tqdm opencv-python Pillow matplotlib
+#
+# 4. Clone or upload the repository to Colab
+#
+# 5. Train with:
+#    !python -m src.training.train --config configs/acne_ultimate_colab.yaml
+#
+# 6. Monitor outputs in: /content/outputs/
+
+# TARGETED IMPROVEMENTS WITH PREPROCESSING:
+# - Better lesion detection through noise reduction and segmentation
+# - Improved contrast for subtle lesions via CLAHE
+# - Enhanced edge details for better severity classification
+# - Reduced false positives through better lesion isolation
+# - Accuracy target: 88-92% (up from ~80% baseline)
+# - F1-macro target: 0.86+
+
