@@ -133,9 +133,10 @@ def main():
     oversample_factors = cfg.get("data.oversample_factors")
     minority_aug = bool(cfg.get("data.minority_aug", False))
     hard_mining = bool(cfg.get("data.hard_mining", False))
+    enable_preprocessing = bool(cfg.get("data.enable_preprocessing", True))
 
     train_loader, val_loader, inferred_num_classes, class_names = build_dataloaders(
-        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode, oversample_factors, minority_aug, hard_mining
+        train_dir, val_dir, img_size, aug_cfg, batch_size, num_workers, sampler_mode, oversample_factors, minority_aug, hard_mining, enable_preprocessing
     )
 
     cfg_num_classes = cfg.get("data.num_classes", inferred_num_classes)
