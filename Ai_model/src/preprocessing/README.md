@@ -8,10 +8,10 @@ The preprocessing pipeline applies a series of image processing techniques to en
 
 ## What Preprocessing Does
 
-The preprocessing pipeline consists of four main steps:
+The preprocessing pipeline consists of modular steps (segmentation can be toggled):
 
 1. **Median Filtering** - Removes salt-and-pepper noise while preserving important edge information
-2. **Otsu Segmentation** - Isolates acne lesions from background skin using adaptive thresholding
+2. **Segmentation (optional)** - Otsu or K-means to isolate lesions from background skin
 3. **CLAHE Enhancement** - Improves local contrast to make subtle lesions more visible
 4. **Sharpening** - Enhances edge details to make lesion boundaries more distinct
 
@@ -103,6 +103,24 @@ train_loader, val_loader, num_classes, class_names = build_dataloaders(
 )
 ```
 
+### Configurable Options
+
+Fine-tune the pipeline via `data.preprocessing` in your config:
+
+```yaml
+data:
+  enable_preprocessing: true
+  preprocessing:
+    use_segmentation: false      # Skip segmentation for faster dataloading
+    median_ksize: 5
+    segmentation_method: otsu    # or kmeans
+    clahe_clip_limit: 2.5
+    clahe_tile_grid_size: [6, 6]
+    sharpen_strength: 1.2
+```
+
+These values override the defaults defined in `pipeline.py`.
+
 ### Individual Components
 
 You can also use individual preprocessing functions:
@@ -129,10 +147,10 @@ sharpened = sharpen(enhanced)
 - **Purpose**: Noise reduction while preserving edges
 - **Implementation**: OpenCV `medianBlur`
 
-### Otsu Segmentation
-- **Method**: Adaptive thresholding
-- **Purpose**: Binary segmentation of lesions vs. background
-- **Implementation**: OpenCV `threshold` with `THRESH_OTSU`
+### Otsu / K-means Segmentation
+- **Method**: Adaptive thresholding (Otsu) or color clustering (K-means)
+- **Purpose**: Binary/cluster segmentation of lesions vs. background
+- **Implementation**: OpenCV `threshold` with `THRESH_OTSU` or scikit-learn `KMeans`
 
 ### CLAHE Enhancement
 - **Clip Limit**: 2.0 (default)
@@ -151,8 +169,8 @@ sharpened = sharpen(enhanced)
 The preprocessing steps are applied in a specific order for optimal results:
 
 1. **Median Filter** → Removes noise first
-2. **Otsu Segmentation** → Isolates lesions on cleaned image
-3. **CLAHE Enhancement** → Enhances contrast of segmented regions
+2. **Segmentation (optional)** → Isolates lesions on cleaned image
+3. **CLAHE Enhancement** → Enhances contrast of (optionally segmented) regions
 4. **Sharpening** → Final edge enhancement
 
 This order ensures that:
@@ -181,6 +199,7 @@ This order ensures that:
 - All functions handle both PIL Images and numpy arrays
 - Preprocessing is applied **before** torchvision transforms
 - The pipeline is optional and can be disabled via the `enable_preprocessing` flag
+- Segmentation can be turned off (recommended for faster Colab runs) by setting `data.preprocessing.use_segmentation: false`
 - Preprocessing is applied to both training and validation sets
 
 ## Future Enhancements

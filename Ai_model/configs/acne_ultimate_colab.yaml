@@ -16,6 +16,13 @@ data:
   minority_aug: true
   hard_mining: true
   enable_preprocessing: true  # Enable preprocessing pipeline (median filter, segmentation, CLAHE, sharpening)
+  preprocessing:
+    use_segmentation: true
+    segmentation_method: otsu
+    median_ksize: 5
+    clahe_clip_limit: 2.0
+    clahe_tile_grid_size: [8, 8]
+    sharpen_strength: 1.5
 
 train:
   model: efficientnet_b3_cbam

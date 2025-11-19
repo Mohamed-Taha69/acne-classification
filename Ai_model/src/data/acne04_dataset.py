@@ -1,4 +1,5 @@
 from typing import Tuple
+from functools import partial
 from torch.utils.data import DataLoader, WeightedRandomSampler, Dataset
 from torchvision import datasets
 from ..utils.transforms import build_transforms
@@ -7,16 +8,17 @@ import numpy as np
 
 class PreprocessingDataset(Dataset):
     """Wrapper dataset that applies preprocessing before transforms."""
-    def __init__(self, base: datasets.ImageFolder, transform, enable_preprocessing: bool = True):
+    def __init__(self, base: datasets.ImageFolder, transform, enable_preprocessing: bool = True, preprocess_config: dict | None = None):
         self.base = base
         self.transform = transform
         self.enable_preprocessing = enable_preprocessing
+        self.preprocess_config = preprocess_config or {}
         self.classes = base.classes
         self.targets = base.targets
         
         if enable_preprocessing:
             from ..preprocessing.pipeline import preprocess_image
-            self.preprocess_image = preprocess_image
+            self.preprocess_image = partial(preprocess_image, config=self.preprocess_config)
 
     def __len__(self):
         return len(self.base)
@@ -37,17 +39,18 @@ class PreprocessingDataset(Dataset):
 
 
 class ClassConditionalTransformDataset(Dataset):
-    def __init__(self, base: datasets.ImageFolder, default_transform, per_class_transforms: dict | None = None, enable_preprocessing: bool = True):
+    def __init__(self, base: datasets.ImageFolder, default_transform, per_class_transforms: dict | None = None, enable_preprocessing: bool = True, preprocess_config: dict | None = None):
         self.base = base
         self.default_transform = default_transform
         self.per_class_transforms = per_class_transforms or {}
         self.enable_preprocessing = enable_preprocessing
+        self.preprocess_config = preprocess_config or {}
         self.classes = base.classes
         self.targets = base.targets
         
         if enable_preprocessing:
             from ..preprocessing.pipeline import preprocess_image
-            self.preprocess_image = preprocess_image
+            self.preprocess_image = partial(preprocess_image, config=self.preprocess_config)
 
     def __len__(self):
         return len(self.base)
@@ -67,8 +70,9 @@ class ClassConditionalTransformDataset(Dataset):
         return img, target
 
 
-def build_dataloaders(train_dir: str, val_dir: str, img_size: int, aug_cfg: dict, batch_size: int, num_workers: int, sampler_mode: str = "none", oversample_factors=None, minority_aug: bool = False, hard_mining: bool = False, enable_preprocessing: bool = True) -> Tuple[DataLoader, DataLoader, int, list]:
+def build_dataloaders(train_dir: str, val_dir: str, img_size: int, aug_cfg: dict, batch_size: int, num_workers: int, sampler_mode: str = "none", oversample_factors=None, minority_aug: bool = False, hard_mining: bool = False, enable_preprocessing: bool = True, preprocess_config: dict | None = None) -> Tuple[DataLoader, DataLoader, int, list]:
     train_tfms, val_tfms = build_transforms(img_size, aug_cfg)
+    preprocess_config = preprocess_config or {}
 
     base_train_ds = datasets.ImageFolder(root=train_dir, transform=None)
     if minority_aug:
@@ -82,10 +86,10 @@ def build_dataloaders(train_dir: str, val_dir: str, img_size: int, aug_cfg: dict
             "affine": aug_cfg.get("affine", [0.12, 12]),
         })
         per_class = {2: severe_tfms, 3: severe_tfms}
-        train_ds = ClassConditionalTransformDataset(base_train_ds, train_tfms, per_class, enable_preprocessing=enable_preprocessing)
+        train_ds = ClassConditionalTransformDataset(base_train_ds, train_tfms, per_class, enable_preprocessing=enable_preprocessing, preprocess_config=preprocess_config)
     else:
-        train_ds = PreprocessingDataset(base_train_ds, train_tfms, enable_preprocessing=enable_preprocessing)
-    val_ds = PreprocessingDataset(datasets.ImageFolder(root=val_dir, transform=None), val_tfms, enable_preprocessing=enable_preprocessing)
+        train_ds = PreprocessingDataset(base_train_ds, train_tfms, enable_preprocessing=enable_preprocessing, preprocess_config=preprocess_config)
+    val_ds = PreprocessingDataset(datasets.ImageFolder(root=val_dir, transform=None), val_tfms, enable_preprocessing=enable_preprocessing, preprocess_config=preprocess_config)
 
     class_names = train_ds.classes
     num_classes = len(class_names)

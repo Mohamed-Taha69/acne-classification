@@ -11,7 +11,7 @@ This module provides image preprocessing functions including:
 from .median_filter import apply_median_filter
 from .segmentation import otsu_segment, kmeans_segment
 from .enhancement import clahe_enhance, sharpen
-from .pipeline import preprocess_image
+from .pipeline import preprocess_image, DEFAULT_PIPELINE_CONFIG
 
 __all__ = [
     'apply_median_filter',
@@ -20,5 +20,6 @@ __all__ = [
     'clahe_enhance',
     'sharpen',
     'preprocess_image',
+    'DEFAULT_PIPELINE_CONFIG',
 ]
 

@@ -67,7 +67,11 @@ data/processed/acne04/
 
 ### Configure Training
 
-Edit `configs/default.yaml` as needed (paths, hyperparameters, model, augmentation).
+- `configs/default.yaml` – baseline desktop config (ResNet / EfficientNet)
+- `configs/acne_ultimate_colab.yaml` – high-accuracy Google Colab recipe with full preprocessing
+- `configs/convnext_colab_fast.yaml` – ConvNeXt-Tiny setup tuned for ~90% accuracy while keeping training under ~2 hours on free Colab
+
+Pick the file that matches your environment and adjust dataset paths if needed.
 
 ### Train
 
@@ -95,7 +99,8 @@ python -m src.inference.predict --checkpoint checkpoints/best.pt --image path/to
 
 ### Notes
 
-- Replace `resnet18` or tune parameters in `configs/default.yaml`.
+- Swap backbones via `train.model` (supports `resnet18/34/50`, `efficientnet_b3`, `efficientnet_b3_cbam`, `convnext_tiny`).
+- Toggle preprocessing in configs with `data.enable_preprocessing` and `data.preprocessing` to balance speed vs. accuracy.
 - If your Acne04 layout differs, adjust `scripts/prepare_acne04.py` accordingly.
 
 

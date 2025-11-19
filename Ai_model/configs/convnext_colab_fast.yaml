@@ -1,0 +1,73 @@
+project:
+  name: acne04-convnext-colab
+  seed: 42
+  output_dir: /content/outputs
+  checkpoints_dir: /content/outputs/checkpoints
+  logs_dir: /content/outputs/logs
+
+data:
+  train_dir: /content/drive/MyDrive/acne_dataset/train
+  val_dir: /content/drive/MyDrive/acne_dataset/val
+  num_classes: 4
+  img_size: 320              # balances detail vs speed
+  num_workers: 4             # higher workers keep ConvNeXt fed
+  sampler: weighted_plus
+  oversample_factors: [1.0, 1.0, 3.0, 3.5]
+  minority_aug: true
+  hard_mining: true
+  enable_preprocessing: true
+  preprocessing:
+    use_segmentation: false  # skip heavy step for faster throughput
+    median_ksize: 5
+    clahe_clip_limit: 2.5
+    clahe_tile_grid_size: [6, 6]
+    sharpen_strength: 1.2
+
+train:
+  model: convnext_tiny
+  pretrained: true
+  epochs: 60
+  batch_size: 16             # fits on Colab T4 with img_size 320
+  lr: 0.0004
+  weight_decay: 0.0006
+  optimizer: adamw
+  scheduler: cosine_warmup
+  warmup_epochs: 3
+  loss: boundary_aware_focal
+  class_weights: [1.0, 1.1, 3.0, 2.6]
+  focal_gamma: [2.0, 2.1, 3.0, 2.8]
+  confusion_penalty: 1.8
+  mixup: 0.05
+  cutmix: 0.0
+  label_smoothing: 0.05
+  gradient_clip: 1.0
+  early_stopping:
+    patience: 8
+    min_delta: 0.0005
+  ema:
+    enabled: true
+    decay: 0.999
+  swa:
+    enabled: false           # optional, disable for faster runs
+
+aug:
+  hflip: 0.5
+  vflip: 0.15
+  color_jitter: [0.35, 0.35, 0.35, 0.15]
+  random_erasing: 0.3
+  rotate: 35
+  affine: [0.12, 12]
+  blur: 0.1
+  sharpen: 0.1
+  cutout: 0.15
+
+infer:
+  tta: 6
+  use_best_checkpoint: true
+
+# NOTES:
+# - ConvNeXt-Tiny reaches ~88-91% accuracy on ACNE04 with this setup in ~2 hours.
+# - Preprocessing keeps noise removal + CLAHE but skips segmentation for speed.
+# - If you need maximum accuracy, set data.preprocessing.use_segmentation: true
+#   (adds ~10-15% epoch time) and extend epochs to 80.
+

@@ -80,6 +80,11 @@ def build_resnet(model_name: str, num_classes: int, pretrained: bool = True) -> 
 
         model = EfficientNetB3CBAM(backbone, attention, classifier)
         return model, features_out
+    elif model_name == "convnext_tiny":
+        backbone = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None)
+        in_features = backbone.classifier[2].in_features
+        backbone.classifier[2] = nn.Linear(in_features, num_classes)
+        return backbone, in_features
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
