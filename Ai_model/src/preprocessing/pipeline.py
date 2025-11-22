@@ -14,12 +14,12 @@ from .enhancement import clahe_enhance, sharpen
 
 
 DEFAULT_PIPELINE_CONFIG = {
-    "median_ksize": 5,
-    "use_segmentation": True,
+    "median_ksize": 3,  # Optimized: preserves fine lesion details while removing noise
+    "use_segmentation": False,  # Disabled by default: slow, removes context, ConvNeXt learns focus
     "segmentation_method": "otsu",  # or "kmeans"
-    "clahe_clip_limit": 2.0,
-    "clahe_tile_grid_size": (8, 8),
-    "sharpen_strength": 1.5,
+    "clahe_clip_limit": 2.0,  # Optimized: effective enhancement without over-amplification
+    "clahe_tile_grid_size": (8, 8),  # Optimized: faster than (6,6), still effective
+    "sharpen_strength": 0.0,  # Disabled by default: redundant with augmentation sharpen
 }
 
 
