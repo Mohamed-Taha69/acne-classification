@@ -6,8 +6,8 @@ project:
   logs_dir: /content/logs
 
 data:
-  train_dir: data/processed/vitiligo/train
-  val_dir: data/processed/vitiligo/val
+  train_dir: /content/drive/MyDrive/vitiligo/train
+  val_dir: /content/drive/MyDrive/vitiligo/val
   num_classes: 2
   class_names: ["Healthy", "Vitiligo"]
   img_size: 224
