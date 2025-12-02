@@ -10,7 +10,7 @@ from ..utils.config import load_config
 from ..utils.seed import set_global_seed
 from ..data.acne04_dataset import build_dataloaders
 from ..models.resnet import build_resnet
-from ..utils.losses import FocalLoss, ClassAwareFocalLoss, BoundaryAwareFocalLoss
+from ..utils.losses import FocalLoss, ClassAwareFocalLoss, BoundaryAwareFocalLoss, BinaryFocalLoss, WeightedBCELoss
 import random
 
 
@@ -18,6 +18,8 @@ def build_optimizer(params, name: str, lr: float, weight_decay: float) -> Optimi
     name = name.lower()
     if name == "adamw":
         return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
+    if name == "adam":
+        return torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
     if name == "sgd":
         return torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=weight_decay)
     raise ValueError(f"Unsupported optimizer: {name}")
@@ -66,7 +68,7 @@ def apply_mixup_cutmix(images: torch.Tensor, targets: torch.Tensor, mixup_alpha:
     return images, targets, targets, lam, 'none'
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device, mixup_alpha: float = 0.0, cutmix_alpha: float = 0.0):
+def train_one_epoch(model, loader, criterion, optimizer, device, mixup_alpha: float = 0.0, cutmix_alpha: float = 0.0, binary: bool = False):
     model.train()
     running_loss = 0.0
     correct = 0
@@ -86,15 +88,20 @@ def train_one_epoch(model, loader, criterion, optimizer, device, mixup_alpha: fl
         optimizer.step()
 
         running_loss += loss.item() * images.size(0)
-        _, predicted = outputs.max(1)
-        correct += predicted.eq(targets).sum().item()
+        if binary:
+            # Binary: sigmoid output, threshold at 0.5
+            predicted = (torch.sigmoid(outputs.squeeze(1)) > 0.5).long()
+            correct += predicted.eq(targets).sum().item()
+        else:
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(targets).sum().item()
         total += targets.size(0)
 
     return running_loss / max(1, total), correct / max(1, total)
 
 
 @torch.no_grad()
-def validate(model, loader, criterion, device):
+def validate(model, loader, criterion, device, binary: bool = False):
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -105,8 +112,13 @@ def validate(model, loader, criterion, device):
         outputs = model(images)
         loss = criterion(outputs, targets)
         running_loss += loss.item() * images.size(0)
-        _, predicted = outputs.max(1)
-        correct += predicted.eq(targets).sum().item()
+        if binary:
+            # Binary: sigmoid output, threshold at 0.5
+            predicted = (torch.sigmoid(outputs.squeeze(1)) > 0.5).long()
+            correct += predicted.eq(targets).sum().item()
+        else:
+            _, predicted = outputs.max(1)
+            correct += predicted.eq(targets).sum().item()
         total += targets.size(0)
     return running_loss / max(1, total), correct / max(1, total)
 
@@ -139,11 +151,17 @@ def main():
     )
 
     cfg_num_classes = cfg.get("data.num_classes", inferred_num_classes)
+    
+    # Detect binary classification mode
+    is_binary = (cfg_num_classes == 2) or (cfg.get("train.loss", "").lower() in ["binary_focal", "weighted_bce", "bce"])
 
     # Model
     model_name = cfg.get("train.model", "resnet18")
     pretrained = bool(cfg.get("train.pretrained", True))
-    model, _ = build_resnet(model_name, num_classes=cfg_num_classes, pretrained=pretrained)
+    if is_binary:
+        model, _ = build_resnet(model_name, num_classes=2, pretrained=pretrained, binary=True)
+    else:
+        model, _ = build_resnet(model_name, num_classes=cfg_num_classes, pretrained=pretrained, binary=False)
     model.to(device)
 
     # Optimizer, scheduler, criterion
@@ -161,28 +179,52 @@ def main():
     loss_name = str(cfg.get("train.loss", "cross_entropy")).lower()
     class_weights_cfg = cfg.get("train.class_weights", "none")
     weight_tensor = None
-    if class_weights_cfg == "auto":
-        # compute from training targets
-        targets = torch.tensor(getattr(train_loader.dataset, 'targets'))
-        counts = torch.bincount(targets)
-        weights = 1.0 / torch.clamp(counts.float(), min=1.0)
-        weights = weights * (len(counts) / weights.sum())
-        weight_tensor = weights.to(device)
-    elif isinstance(class_weights_cfg, (list, tuple)):
-        weight_tensor = torch.tensor(class_weights_cfg, dtype=torch.float).to(device)
-
-    if loss_name == "boundary_aware_focal":
-        gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
-        confusion_penalty = float(cfg.get("train.confusion_penalty", 2.0))
-        criterion = BoundaryAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor, confusion_penalty=confusion_penalty)
-    elif loss_name == "class_focal":
-        gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
-        criterion = ClassAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor)
-    elif loss_name == "focal":
-        criterion = FocalLoss(gamma=2.0, weight=weight_tensor)
+    
+    if is_binary:
+        # Binary classification losses
+        if loss_name == "binary_focal":
+            if isinstance(class_weights_cfg, (list, tuple)) and len(class_weights_cfg) == 2:
+                # For binary, use pos_weight = class_weights[1] / class_weights[0]
+                pos_weight = class_weights_cfg[1] / class_weights_cfg[0] if class_weights_cfg[0] > 0 else 1.0
+                weight_tensor = torch.tensor([pos_weight], dtype=torch.float).to(device)
+            criterion = BinaryFocalLoss(gamma=2.0, weight=weight_tensor)
+        elif loss_name in ["weighted_bce", "bce"]:
+            if isinstance(class_weights_cfg, (list, tuple)) and len(class_weights_cfg) == 2:
+                pos_weight = class_weights_cfg[1] / class_weights_cfg[0] if class_weights_cfg[0] > 0 else 1.0
+            else:
+                pos_weight = None
+            criterion = WeightedBCELoss(pos_weight=pos_weight)
+        else:
+            # Default to weighted BCE for binary
+            if isinstance(class_weights_cfg, (list, tuple)) and len(class_weights_cfg) == 2:
+                pos_weight = class_weights_cfg[1] / class_weights_cfg[0] if class_weights_cfg[0] > 0 else 1.0
+            else:
+                pos_weight = None
+            criterion = WeightedBCELoss(pos_weight=pos_weight)
     else:
-        label_smoothing = float(cfg.get("train.label_smoothing", 0.0))
-        criterion = nn.CrossEntropyLoss(weight=weight_tensor, label_smoothing=label_smoothing)
+        # Multi-class classification losses
+        if class_weights_cfg == "auto":
+            # compute from training targets
+            targets = torch.tensor(getattr(train_loader.dataset, 'targets'))
+            counts = torch.bincount(targets)
+            weights = 1.0 / torch.clamp(counts.float(), min=1.0)
+            weights = weights * (len(counts) / weights.sum())
+            weight_tensor = weights.to(device)
+        elif isinstance(class_weights_cfg, (list, tuple)):
+            weight_tensor = torch.tensor(class_weights_cfg, dtype=torch.float).to(device)
+
+        if loss_name == "boundary_aware_focal":
+            gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
+            confusion_penalty = float(cfg.get("train.confusion_penalty", 2.0))
+            criterion = BoundaryAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor, confusion_penalty=confusion_penalty)
+        elif loss_name == "class_focal":
+            gamma_per_class = cfg.get("train.focal_gamma", [2.0] * cfg_num_classes)
+            criterion = ClassAwareFocalLoss(gamma_per_class=gamma_per_class, weight=weight_tensor)
+        elif loss_name == "focal":
+            criterion = FocalLoss(gamma=2.0, weight=weight_tensor)
+        else:
+            label_smoothing = float(cfg.get("train.label_smoothing", 0.0))
+            criterion = nn.CrossEntropyLoss(weight=weight_tensor, label_smoothing=label_smoothing)
 
     # Output dirs
     checkpoints_dir = Path(cfg.get("project.checkpoints_dir", "checkpoints"))
@@ -197,8 +239,8 @@ def main():
     cutmix_alpha = float(cfg.get("train.cutmix", 0.0))
 
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, mixup_alpha, cutmix_alpha)
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, mixup_alpha, cutmix_alpha, binary=is_binary)
+        val_loss, val_acc = validate(model, val_loader, criterion, device, binary=is_binary)
         scheduler.step()
 
         print(f"Epoch {epoch:03d} | train_loss {train_loss:.4f} acc {train_acc:.4f} | val_loss {val_loss:.4f} acc {val_acc:.4f}")

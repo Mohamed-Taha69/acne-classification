@@ -20,7 +20,15 @@ def main():
 
     num_classes = len(class_names) if class_names else int(cfg.get("data", {}).get("num_classes", 2))
     model_name = cfg.get("train", {}).get("model", "resnet18")
-    model, _ = build_resnet(model_name, num_classes=num_classes, pretrained=False)
+    
+    # Detect binary classification
+    is_binary = (num_classes == 2) or (cfg.get("train", {}).get("loss", "").lower() in ["binary_focal", "weighted_bce", "bce"])
+    
+    if is_binary:
+        model, _ = build_resnet(model_name, num_classes=2, pretrained=False, binary=True)
+    else:
+        model, _ = build_resnet(model_name, num_classes=num_classes, pretrained=False, binary=False)
+    
     model.load_state_dict(ckpt["model"])
     model.to(device)
     model.eval()
@@ -34,11 +42,21 @@ def main():
     img = Image.open(args.image).convert("RGB")
     x = preprocess(img).unsqueeze(0).to(device)
     logits = model(x)
-    prob = torch.softmax(logits, dim=1)
-    conf, pred_idx = prob.max(dim=1)
-    pred_idx = pred_idx.item()
-    conf = conf.item()
-    pred_label = class_names[pred_idx] if class_names else str(pred_idx)
+    
+    if is_binary:
+        # Binary classification: sigmoid output
+        prob = torch.sigmoid(logits.squeeze(1))
+        pred_idx = (prob > 0.5).long().item()
+        conf = prob.item() if pred_idx == 1 else (1 - prob.item())
+        pred_label = class_names[pred_idx] if class_names and len(class_names) > pred_idx else ("Vitiligo" if pred_idx == 1 else "Healthy")
+    else:
+        # Multi-class classification: softmax output
+        prob = torch.softmax(logits, dim=1)
+        conf, pred_idx = prob.max(dim=1)
+        pred_idx = pred_idx.item()
+        conf = conf.item()
+        pred_label = class_names[pred_idx] if class_names else str(pred_idx)
+    
     print({"label": pred_label, "confidence": round(conf, 4)})
 
 

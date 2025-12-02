@@ -1,0 +1,40 @@
+project:
+  name: acne04-classification-colab
+  seed: 42
+  output_dir: /content/outputs
+  checkpoints_dir: /content/checkpoints
+  logs_dir: /content/logs
+data:
+  train_dir: /content/drive/MyDrive/acne_dataset/train
+  val_dir: /content/drive/MyDrive/acne_dataset/val
+  num_classes: 4
+  img_size: 224
+  num_workers: 2
+  sampler: weighted_plus
+  oversample_factors: [1.0, 1.0, 2.5, 3.0]
+  minority_aug: true
+train:
+  model: efficientnet_b3_cbam
+  pretrained: true
+  epochs: 60
+  batch_size: 16
+  lr: 0.0005
+  weight_decay: 0.01
+  optimizer: adamw
+  scheduler: cosine_warmup
+  warmup_epochs: 5
+  loss: class_focal
+  class_weights: [1.0, 1.1, 2.5, 2.0]
+  focal_gamma: [2.0, 2.0, 2.8, 2.5]
+  mixup: 0.1
+  cutmix: 0.1
+  label_smoothing: 0.0
+aug:
+  hflip: 0.5
+  vflip: 0.15
+  color_jitter: [0.3, 0.3, 0.3, 0.15]
+  random_erasing: 0.25
+  rotate: 30
+  affine: [0.1, 10]
+infer:
+  tta: 4

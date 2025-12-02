@@ -3,10 +3,16 @@ from torchvision import transforms
 
 
 def build_transforms(img_size: int, aug_cfg: dict) -> Tuple[transforms.Compose, transforms.Compose]:
-    train_tfms = [
-        transforms.Resize((img_size, img_size)),
-        transforms.RandomHorizontalFlip(p=aug_cfg.get("hflip", 0.5)),
-    ]
+    train_tfms = []
+    
+    # Random crop if specified (for Vitiligo)
+    if aug_cfg.get("random_crop", False):
+        train_tfms.append(transforms.RandomResizedCrop(img_size, scale=(0.8, 1.0)))
+    else:
+        train_tfms.append(transforms.Resize((img_size, img_size)))
+    
+    train_tfms.append(transforms.RandomHorizontalFlip(p=aug_cfg.get("hflip", 0.5)))
+    
     if aug_cfg.get("vflip", 0.0) > 0:
         train_tfms.append(transforms.RandomVerticalFlip(p=aug_cfg.get("vflip", 0.0)))
     if aug_cfg.get("rotate", 0):

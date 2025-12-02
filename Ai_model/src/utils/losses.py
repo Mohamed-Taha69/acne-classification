@@ -93,3 +93,44 @@ class BoundaryAwareFocalLoss(nn.Module):
         return total_loss
 
 
+class BinaryFocalLoss(nn.Module):
+    """Binary focal loss for binary classification."""
+    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None, reduction: str = "mean"):
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # logits: (batch, 1), targets: (batch,) with values 0 or 1
+        targets = targets.float().unsqueeze(1)  # (batch, 1)
+        probs = torch.sigmoid(logits)
+        pt = probs * targets + (1 - probs) * (1 - targets)  # p_t
+        focal_weight = (1 - pt).pow(self.gamma)
+        
+        bce = F.binary_cross_entropy_with_logits(logits, targets, weight=self.weight, reduction='none')
+        loss = focal_weight * bce
+        
+        if self.reduction == 'mean':
+            return loss.mean()
+        if self.reduction == 'sum':
+            return loss.sum()
+        return loss
+
+
+class WeightedBCELoss(nn.Module):
+    """Weighted binary cross-entropy loss."""
+    def __init__(self, pos_weight: float = None, reduction: str = "mean"):
+        super().__init__()
+        self.pos_weight = pos_weight
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # logits: (batch, 1), targets: (batch,) with values 0 or 1
+        targets = targets.float().unsqueeze(1)  # (batch, 1)
+        pos_weight = None
+        if self.pos_weight is not None:
+            pos_weight = torch.tensor([self.pos_weight], device=logits.device, dtype=logits.dtype)
+        return F.binary_cross_entropy_with_logits(logits, targets, pos_weight=pos_weight, reduction=self.reduction)
+
+

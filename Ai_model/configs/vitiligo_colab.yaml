@@ -1,0 +1,47 @@
+project:
+  name: vitiligo-classification-colab
+  seed: 42
+  output_dir: /content/outputs
+  checkpoints_dir: /content/checkpoints
+  logs_dir: /content/logs
+
+data:
+  train_dir: data/processed/vitiligo/train
+  val_dir: data/processed/vitiligo/val
+  num_classes: 2
+  class_names: ["Healthy", "Vitiligo"]
+  img_size: 224
+  num_workers: 2
+  sampler: weighted_plus
+  oversample_factors: [1.0, 1.0]
+  minority_aug: false
+  hard_mining: false
+
+train:
+  model: efficientnet_b3
+  pretrained: true
+  epochs: 30
+  batch_size: 16
+  lr: 0.001
+  weight_decay: 0.01
+  optimizer: adam
+  scheduler: cosine
+  warmup_epochs: 0
+  loss: binary_focal
+  class_weights: [0.7132435466, 1.6723684211]
+  mixup: 0.0
+  cutmix: 0.0
+  label_smoothing: 0.0
+
+aug:
+  hflip: 0.5
+  vflip: 0.15
+  rotate: 20
+  color_jitter: [0.1, 0.1, 0.1, 0.05]
+  random_crop: true
+  random_erasing: 0.0
+  affine: null
+
+infer:
+  tta: 0
+
